@@ -1,0 +1,60 @@
+name: Build iPhone app
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'CWA/**'
+      - 'Tests/**'
+      - 'project.yml'
+      - '.github/workflows/build-ios.yml'
+permissions:
+  contents: read
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE_APP=$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -n 1)
+          if [ -z "$XCODE_APP" ]; then
+            echo 'No Xcode 26 installation found on this runner.'
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+      - name: Check catalog parsing and URL safety
+        run: |
+          set -euo pipefail
+          swiftc CWA/Catalog.swift Tests/CatalogChecks.swift -o /tmp/catalog-checks
+          /tmp/catalog-checks
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for iPhone
+        run: |
+          set -euo pipefail
+          xcodebuild -project CWA.xcodeproj -scheme CWA -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Package unsigned IPA for AltStore
+        run: |
+          set -euo pipefail
+          mkdir -p package/Payload
+          cp -R build/Build/Products/Release-iphoneos/CWA.app package/Payload/
+          cd package
+          zip -qr ../CWA.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CWA-iPhone
+          path: CWA.ipa
+          retention-days: 3
+          if-no-files-found: error
