@@ -43,6 +43,12 @@ struct FeedLink: Identifiable, Hashable {
     let href: String
     let type: String
     var format: String {
+        let path = URLComponents(string: href)?.path ?? href
+        let parts = path.split(separator: "/").map(String.init)
+        if let index = parts.lastIndex(of: "download"), parts.count > index + 2 {
+            return parts[index + 2].uppercased()
+        }
+        if path.lowercased().contains(".kepub") { return "KEPUB" }
         if type.contains("epub") { return "EPUB" }
         if type.contains("pdf") { return "PDF" }
         return href.split(separator: "/").last.map { String($0).uppercased() } ?? "BOOK"
@@ -57,7 +63,20 @@ struct Entry: Identifiable, Hashable {
     var published = ""
     var tags: [String] = []
     var links: [FeedLink] = []
-    var downloads: [FeedLink] { links.filter { $0.rel.contains("/acquisition") } }
+    var downloads: [FeedLink] {
+        var seen = Set<String>()
+        return links.filter { $0.rel.contains("/acquisition") && seen.insert($0.href).inserted }
+    }
+    var bookID: Int? {
+        for link in links {
+            let parts = (URLComponents(string: link.href)?.path ?? "").split(separator: "/")
+            for marker in ["download", "cover"] {
+                if let i = parts.firstIndex(of: Substring(marker)), parts.count > i + 1,
+                   let id = Int(parts[i + 1]) { return id }
+            }
+        }
+        return nil
+    }
     var cover: FeedLink? { links.first { $0.rel == "http://opds-spec.org/image" } ?? links.first { $0.rel.contains("/image/") } }
     var subsection: FeedLink? { links.first { $0.rel == "subsection" } }
     var isBook: Bool { subsection == nil }
@@ -128,7 +147,7 @@ final class RedirectGuard: NSObject, URLSessionTaskDelegate {
 }
 final class Catalog {
     let account: Account
-    private let session: URLSession
+    let session: URLSession
     init(_ account: Account) {
         self.account = account
         let configuration = URLSessionConfiguration.ephemeral
@@ -163,7 +182,9 @@ final class Catalog {
         }
     }
     func data(_ url: URL) async throws -> Data {
-        let (data, response) = try await session.data(for: request(url))
+        var req = try request(url)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await session.data(for: req)
         try check(response)
         return data
     }
@@ -175,7 +196,7 @@ final class Catalog {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let safeTitle = String(title.map { "/\\:?%*|\"<>".contains($0) ? "_" : $0 }.prefix(100))
-        let destination = folder.appendingPathComponent(safeTitle.isEmpty ? "Book" : safeTitle).appendingPathExtension(format.lowercased())
+        let destination = folder.appendingPathComponent(safeTitle.isEmpty ? "Book" : safeTitle).appendingPathExtension(format.uppercased() == "KEPUB" ? "kepub.epub" : format.lowercased())
         try FileManager.default.moveItem(at: temporary, to: destination)
         return destination
     }

@@ -99,14 +99,11 @@ struct MainView: View {
                             LabeledContent("Server", value: account.base.host ?? "CWA")
                             LabeledContent("Username", value: account.username)
                         }
-                        Section("This first version") {
-                            Text("Browse, search, view shelves, and download books. Shelf editing and an in-app reader are not included yet.")
-                            Text("Your Kobo continues syncing directly with CWA.")
-                        }
+                        KoboSyncSection(client: client)
                         Section {
                             Button("Disconnect", role: .destructive, action: disconnect)
                         } footer: { Text("Removes the saved login from this iPhone. Books already exported to Files or another app remain there.") }
-                        Section { LabeledContent("Version", value: "0.1.0") }
+                        Section { LabeledContent("Version", value: "0.2.0") }
                     }.navigationTitle("Settings")
                 }
             }
@@ -234,6 +231,9 @@ struct CatalogView: View {
         .navigationTitle(title)
         .task { if !loaded { await load(reset: true) } }
         .refreshable { await load(reset: true) }
+        .onReceive(NotificationCenter.default.publisher(for: .cwaBookChanged)) { _ in
+            Task { await load(reset: true) }
+        }
     }
     @MainActor private func load(reset: Bool) async {
         guard !busy else { return }
@@ -269,6 +269,7 @@ struct CoverView: View {
     let book: Entry
     let page: URL
     @State private var image: UIImage?
+    @State private var revision = UUID()
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12).fill(.teal.opacity(0.10))
@@ -278,8 +279,9 @@ struct CoverView: View {
         .aspectRatio(2.0 / 3.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityHidden(true)
-        .task(id: book.id) {
-            guard image == nil, let link = book.cover,
+        .onReceive(NotificationCenter.default.publisher(for: .cwaBookChanged)) { _ in revision = UUID() }
+        .task(id: revision) {
+            guard let link = book.cover,
                   let url = try? client.resolve(link.href, relativeTo: page),
                   let data = try? await client.data(url) else { return }
             image = UIImage(data: data)
@@ -301,12 +303,15 @@ struct BookTile: View {
 struct SharedBook: Identifiable { let id = UUID(); let url: URL }
 struct BookView: View {
     let client: Catalog
-    let book: Entry
+    @State var book: Entry
     let page: URL
     @State private var busy = false
     @State private var error: String?
     @State private var shared: SharedBook?
     @State private var temporaryFolder: URL?
+    @State private var chooseDownload = false
+    @State private var editing = false
+    @State private var notice: String?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -317,15 +322,12 @@ struct BookView: View {
                     Text(book.authors.joined(separator: ", ")).font(.title3).foregroundStyle(.secondary)
                 }
                 if !book.downloads.isEmpty {
-                    Menu {
-                        ForEach(book.downloads) { link in
-                            Button("Download \(link.format)") { Task { await download(link) } }
-                        }
-                    } label: {
-                        HStack { if busy { ProgressView() }; Label(busy ? "Downloading…" : "Download book", systemImage: "arrow.down.circle.fill") }
-                            .frame(maxWidth: .infinity)
+                    Button { chooseDownload = true } label: {
+                        Label(busy ? "Downloading…" : "Download book", systemImage: "arrow.down.circle.fill")
+                            .frame(maxWidth: .infinity, minHeight: 24)
                     }.buttonStyle(.borderedProminent).controlSize(.large).disabled(busy)
                 }
+                if let notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
                 if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 if !book.summary.isEmpty { Text(book.summary).font(.body).textSelection(.enabled) }
                 if !book.publisher.isEmpty { LabeledContent("Publisher", value: book.publisher) }
@@ -334,12 +336,34 @@ struct BookView: View {
             }.padding(24)
         }
         .navigationTitle("Book details").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Edit", systemImage: "pencil") { editing = true }.disabled(busy)
+            }
+        }
+        .confirmationDialog("Download format", isPresented: $chooseDownload, titleVisibility: .visible) {
+            ForEach(book.downloads) { link in
+                Button("Download \(link.format)") { Task { await download(link) } }
+            }
+        }
+        .sheet(isPresented: $editing) {
+            MetadataEditor(client: client, book: book, page: page) { metadata in
+                book.title = metadata["title"]
+                book.authors = metadata["authors"].components(separatedBy: " & ")
+                book.publisher = metadata["publisher"]
+                book.published = metadata["pubdate"]
+                book.tags = metadata["tags"].components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                notice = "Saved to CWA."
+                NotificationCenter.default.post(name: .cwaBookChanged, object: nil)
+            }
+        }
         .sheet(item: $shared, onDismiss: {
             if let folder = temporaryFolder { try? FileManager.default.removeItem(at: folder) }
             temporaryFolder = nil
         }) { item in ShareSheet(url: item.url) }
     }
     @MainActor private func download(_ link: FeedLink) async {
+        guard !busy else { return }
         busy = true; error = nil
         defer { busy = false }
         do {
@@ -355,3 +379,5 @@ struct ShareSheet: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: [url], applicationActivities: nil) }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) { }
 }
+
+extension Notification.Name { static let cwaBookChanged = Notification.Name("CWABookChanged") }

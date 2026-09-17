@@ -30,15 +30,16 @@ jobs:
           fi
           sudo xcode-select -s "$XCODE_APP/Contents/Developer"
           xcodebuild -version
-      - name: Check catalog parsing and URL safety
-        run: |
-          set -euo pipefail
-          swiftc CWA/Catalog.swift Tests/CatalogChecks.swift -o /tmp/catalog-checks
-          /tmp/catalog-checks
       - name: Generate Xcode project
         run: |
           brew install xcodegen
           xcodegen generate
+      - name: Check catalog and metadata handling
+        run: |
+          set -euo pipefail
+          xcodebuild -project CWA.xcodeproj -scheme CWAChecks -configuration Release \
+            -destination 'platform=macOS' -derivedDataPath checks CODE_SIGNING_ALLOWED=NO build
+          checks/Build/Products/Release/CWAChecks
       - name: Build for iPhone
         run: |
           set -euo pipefail

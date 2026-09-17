@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSoup
 
 @main struct CatalogChecks {
     static func main() throws {
@@ -41,6 +42,47 @@ import Foundation
                 fatalError("Accepted a cross-origin credential destination")
             } catch is CatalogError { }
         }
-        print("Catalog parsing and origin checks passed.")
+        let kepub = FeedLink(rel: "http://opds-spec.org/acquisition", href: "/opds/download/1/kepub/", type: "application/epub+zip")
+        precondition(kepub.format == "KEPUB")
+        var entry = feed.entries[0]
+        entry.links.append(kepub)
+        entry.links.append(kepub)
+        precondition(entry.downloads.map(\.format) == ["EPUB", "KEPUB"])
+        precondition(entry.bookID == 1)
+        let form = try SwiftSoup.parse("""
+        <form id="book_edit_frm">
+          <input name="title" value="A &amp; B &quot;quoted&quot;">
+          <input name="authors" value="An Author">
+          <input name="identifier-type-3" value="isbn"><input name="identifier-val-3" value="123">
+          <input name="languages" value="English"><input name="csrf_token" value="token">
+          <input name="blacklist_annotations" type="checkbox" checked>
+          <input name="blacklist_reading_progress" type="checkbox">
+          <textarea name="comments">&lt;p&gt;Keep &amp;amp; preserve&lt;/p&gt;</textarea>
+          <select name="custom_column_1"><option value="None"></option><option value="True" selected>Yes</option></select>
+          <input name="btn-upload-cover" type="file"><input name="disabled" disabled value="ignore">
+        </form>
+        """)
+        let fields = try WebForm.fields(form.select("form").first()!)
+        precondition(fields["title"] == "A & B \"quoted\"")
+        precondition(fields["comments"] == "<p>Keep &amp; preserve</p>")
+        precondition(fields["identifier-val-3"] == "123")
+        precondition(fields["languages"] == "English")
+        precondition(fields["custom_column_1"] == "True")
+        precondition(fields["blacklist_annotations"] == "on")
+        precondition(fields["blacklist_reading_progress"] == nil)
+        precondition(fields["btn-upload-cover"] == nil && fields["disabled"] == nil)
+        var metadata = BookMetadata(fields: fields, original: fields, bookID: 1, uuid: "test")
+        metadata["rating"] = "4.5"; metadata["series_index"] = "0.5"
+        metadata["pubdate"] = "2012-06-14"
+        metadata.year = "2012"
+        precondition(metadata["pubdate"] == "2012-06-14")
+        metadata.year = "2020"
+        precondition(metadata["pubdate"] == "2020-01-01")
+        try metadata.validate()
+        for invalid in ["6", "nan", "4.2"] {
+            metadata["rating"] = invalid
+            do { try metadata.validate(); fatalError("Accepted invalid rating") } catch is CatalogError { }
+        }
+        print("Catalog, origin safety, form preservation, and metadata checks passed.")
     }
 }
