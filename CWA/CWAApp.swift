@@ -136,15 +136,30 @@ struct LibraryView: View {
 }
 struct ShelvesView: View {
     let client: Catalog
+
     var body: some View {
         List {
-            NavigationLink("My shelves", systemImage: "square.stack") {
-                CatalogView(client: client, url: client.endpoint("opds/shelfindex"), title: "My shelves")
+            NavigationLink {
+                CatalogView(
+                    client: client,
+                    url: client.endpoint("opds/shelfindex"),
+                    title: "My shelves"
+                )
+            } label: {
+                Label("My shelves", systemImage: "square.stack")
             }
-            NavigationLink("Magic shelves", systemImage: "sparkles") {
-                CatalogView(client: client, url: client.endpoint("opds/magicshelfindex"), title: "Magic shelves")
+
+            NavigationLink {
+                CatalogView(
+                    client: client,
+                    url: client.endpoint("opds/magicshelfindex"),
+                    title: "Magic shelves"
+                )
+            } label: {
+                Label("Magic shelves", systemImage: "sparkles")
             }
-        }.navigationTitle("Shelves")
+        }
+        .navigationTitle("Shelves")
     }
 }
 struct SearchView: View {
