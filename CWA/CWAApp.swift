@@ -4,6 +4,8 @@ import UIKit
 @main
 struct CWAApp: App {
     @State private var account = Vault.load()
+    @AppStorage("appearance") private var appearance = "Automatic"
+    @AppStorage("accent") private var accent = "Default"
     var body: some Scene {
         WindowGroup {
             Group {
@@ -11,7 +13,8 @@ struct CWAApp: App {
                     MainView(account: account) { Vault.clear(); self.account = nil }
                 } else { LoginView { self.account = $0 } }
             }
-            .tint(.teal)
+            .tint(AccentChoice.color(accent))
+            .preferredColorScheme(appearance == "Dark" ? .dark : appearance == "Light" ? .light : nil)
         }
     }
 }
@@ -28,7 +31,7 @@ struct LoginView: View {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
-                        Image(systemName: "books.vertical.fill").font(.system(size: 48)).foregroundStyle(.teal)
+                        Image(systemName: "books.vertical.fill").font(.system(size: 48)).foregroundStyle(Color.accentColor)
                         Text("Your books. Your server.").font(.title2.bold())
                         Text("Connect to Calibre-Web Automated to bring your library to your iPhone.").foregroundStyle(.secondary)
                     }.padding(.vertical, 20)
@@ -99,11 +102,12 @@ struct MainView: View {
                             LabeledContent("Server", value: account.base.host ?? "CWA")
                             LabeledContent("Username", value: account.username)
                         }
+                        DisplaySection()
                         KoboSyncSection(client: client)
                         Section {
                             Button("Disconnect", role: .destructive, action: disconnect)
                         } footer: { Text("Removes the saved login from this iPhone. Books already exported to Files or another app remain there.") }
-                        Section { LabeledContent("Version", value: "0.2.0") }
+                        Section { LabeledContent("Version", value: "0.3.0") }
                     }.navigationTitle("Settings")
                 }
             }
@@ -111,26 +115,6 @@ struct MainView: View {
     }
 }
 
-struct LibraryView: View {
-    let client: Catalog
-    @State private var order = "Title"
-    private var url: URL { client.endpoint(order == "Title" ? "opds/books/letter/00" : "opds/new") }
-    var body: some View {
-        CatalogView(client: client, url: url, title: "Library")
-            .id(order)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Picker("Sort books", selection: $order) {
-                            Text("Title").tag("Title")
-                            Text("Recently added").tag("Recent")
-                        }
-                    } label: { Image(systemName: "arrow.up.arrow.down") }
-                    .accessibilityLabel("Sort books")
-                }
-            }
-    }
-}
 struct ShelvesView: View {
     let client: Catalog
 
@@ -171,7 +155,11 @@ struct SearchView: View {
     var body: some View {
         Group {
             if submitted.isEmpty {
-                ContentUnavailableView("Find your next book", systemImage: "magnifyingglass", description: Text("Search by title or author, then tap Search on the keyboard."))
+                VStack(spacing: 20) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 58, weight: .regular)).accessibilityHidden(true)
+                    Text("Search by title or author, then tap Search on the keyboard.")
+                        .font(.body).multilineTextAlignment(.center).frame(maxWidth: 320)
+                }.foregroundStyle(.secondary).padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
                     .navigationTitle("Search")
             } else { CatalogView(client: client, url: url, title: "Search").id(submitted) }
         }
@@ -210,7 +198,7 @@ struct CatalogView: View {
                                 CatalogView(client: client, url: destination, title: entry.title)
                             } label: {
                                 VStack(alignment: .leading, spacing: 14) {
-                                    Image(systemName: "square.stack.fill").font(.largeTitle).foregroundStyle(.teal)
+                                    Image(systemName: "square.stack.fill").font(.largeTitle).foregroundStyle(Color.accentColor)
                                     Text(entry.title).font(.headline).foregroundStyle(.primary)
                                 }.frame(maxWidth: .infinity, minHeight: 110, alignment: .leading).padding()
                                     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
@@ -272,7 +260,7 @@ struct CoverView: View {
     @State private var revision = UUID()
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12).fill(.teal.opacity(0.10))
+            RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.10))
             if let image { Image(uiImage: image).resizable().scaledToFit() }
             else { Image(systemName: "book.closed.fill").font(.system(size: 42)).foregroundStyle(.teal.opacity(0.55)) }
         }
@@ -310,6 +298,8 @@ struct BookView: View {
     @State private var shared: SharedBook?
     @State private var temporaryFolder: URL?
     @State private var chooseDownload = false
+    @State private var confirmDelete = false
+    @Environment(\.dismiss) private var dismiss
     @State private var editing = false
     @State private var notice: String?
     var body: some View {
@@ -326,6 +316,12 @@ struct BookView: View {
                         Label(busy ? "Downloading…" : "Download book", systemImage: "arrow.down.circle.fill")
                             .frame(maxWidth: .infinity, minHeight: 24)
                     }.buttonStyle(.borderedProminent).controlSize(.large).disabled(busy)
+        .confirmationDialog("Download format", isPresented: $chooseDownload, titleVisibility: .visible) {
+            ForEach(book.downloads) { link in
+                Button("Download \(link.format)") { Task { await download(link) } }
+            }
+        }
+
                 }
                 if let notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
                 if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
@@ -340,12 +336,14 @@ struct BookView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit", systemImage: "pencil") { editing = true }.disabled(busy)
             }
-        }
-        .confirmationDialog("Download format", isPresented: $chooseDownload, titleVisibility: .visible) {
-            ForEach(book.downloads) { link in
-                Button("Download \(link.format)") { Task { await download(link) } }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Delete book", systemImage: "trash", role: .destructive) { confirmDelete = true }.disabled(busy || book.bookID == nil)
             }
         }
+        .alert("Delete this book?", isPresented: $confirmDelete) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete book", role: .destructive) { Task { await deleteBook() } }
+        } message: { Text("“\(book.title)” and all its formats will be permanently deleted from your CWA library on the server.") }
         .sheet(isPresented: $editing) {
             MetadataEditor(client: client, book: book, page: page) { metadata in
                 book.title = metadata["title"]
@@ -361,6 +359,16 @@ struct BookView: View {
             if let folder = temporaryFolder { try? FileManager.default.removeItem(at: folder) }
             temporaryFolder = nil
         }) { item in ShareSheet(url: item.url) }
+    }
+    @MainActor private func deleteBook() async {
+        guard !busy, let id = book.bookID else { return }
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            try await client.deleteBook(id: id)
+            NotificationCenter.default.post(name: .cwaBookChanged, object: nil)
+            dismiss()
+        } catch { self.error = error.localizedDescription }
     }
     @MainActor private func download(_ link: FeedLink) async {
         guard !busy else { return }

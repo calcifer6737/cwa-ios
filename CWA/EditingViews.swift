@@ -21,7 +21,8 @@ struct KoboSyncSection: View {
         } header: { Text("Kobo") } footer: {
             Text("Prepares a full sync for your CWA account. Then tap Sync on your Kobo while it can reach CWA.")
         }
-        .confirmationDialog("Prepare a full Kobo sync?", isPresented: $confirm, titleVisibility: .visible) {
+        .alert("Prepare a full Kobo sync?", isPresented: $confirm) {
+            Button("Cancel", role: .cancel) { }
             Button("Force full sync") { Task { await sync() } }
         } message: { Text("CWA will reset your account’s sync records. Your next Kobo sync may take longer.") }
     }
@@ -108,7 +109,7 @@ struct MetadataEditor: View {
             .navigationTitle("Edit metadata").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { if dirty { discard = true } else { dismiss() } }.disabled(busy)
+                    Button("Cancel") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil); if dirty { discard = true } else { dismiss() } }.disabled(busy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await save() } } label: { if busy { ProgressView() } else { Text("Save").bold() } }
@@ -116,7 +117,8 @@ struct MetadataEditor: View {
                 }
             }
             .interactiveDismissDisabled(dirty || busy)
-            .confirmationDialog("Discard your edits?", isPresented: $discard, titleVisibility: .visible) {
+            .alert("Discard your edits?", isPresented: $discard) {
+                Button("Keep editing", role: .cancel) { }
                 Button("Discard edits", role: .destructive) { dismiss() }
             }
             .task { await load() }

@@ -148,9 +148,8 @@ final class RedirectGuard: NSObject, URLSessionTaskDelegate {
 final class Catalog {
     let account: Account
     let session: URLSession
-    init(_ account: Account) {
+    init(_ account: Account, configuration: URLSessionConfiguration = .ephemeral) {
         self.account = account
-        let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 180
         session = URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)

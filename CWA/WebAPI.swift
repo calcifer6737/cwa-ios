@@ -77,7 +77,7 @@ enum WebForm {
 }
 
 extension Catalog {
-    private func send(_ url: URL, fields: [String: String], cover: Data? = nil) async throws -> (Data, URLResponse) {
+    private func send(_ url: URL, fields: [String: String], cover: Data? = nil, bookFile: Data? = nil, filename: String = "book.epub") async throws -> (Data, URLResponse) {
         var req = try request(url)
         req.httpMethod = "POST"
         req.setValue(account.base.absoluteString + "/", forHTTPHeaderField: "Referer")
@@ -93,6 +93,11 @@ extension Catalog {
         if let cover {
             append("--\(boundary)\r\nContent-Disposition: form-data; name=\"btn-upload-cover\"; filename=\"cover.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n")
             body.append(cover); append("\r\n")
+        }
+        if let bookFile {
+            let safeName = filename.replacingOccurrences(of: "\"", with: "_").replacingOccurrences(of: "\r", with: "_").replacingOccurrences(of: "\n", with: "_")
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"btn-upload\"; filename=\"\(safeName)\"\r\nContent-Type: application/octet-stream\r\n\r\n")
+            body.append(bookFile); append("\r\n")
         }
         append("--\(boundary)--\r\n")
         req.httpBody = body
@@ -161,6 +166,57 @@ extension Catalog {
               !(try response.select(".alert-success").isEmpty()) else {
             throw CatalogError.message("CWA did not confirm the save. Reopen the editor to check before trying again.")
         }
+    }
+    func uploadBook(file: URL) async throws {
+        let page = try await authenticatedPage(endpoint("me"))
+        guard let input = try page.select("input[name=btn-upload]").first() else {
+            throw CatalogError.message("Uploads are unavailable. Enable uploads in CWA and give your account upload permission.")
+        }
+        let accepted = try input.attr("accept").lowercased().split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let ext = "." + file.pathExtension.lowercased()
+        guard accepted.isEmpty || accepted.contains(".*") || accepted.contains("*") || accepted.contains(ext) else {
+            throw CatalogError.message("CWA does not accept this file type: \(file.pathExtension).")
+        }
+        let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 0, size <= 200 * 1024 * 1024 else {
+            throw CatalogError.message("Choose a nonempty book file smaller than 200 MB.")
+        }
+        let (bytes, _) = try await send(endpoint("upload"), fields: ["csrf_token": try WebForm.token(page)], bookFile: Data(contentsOf: file), filename: file.lastPathComponent)
+        guard let json = try JSONSerialization.jsonObject(with: bytes) as? [String: String], let location = json["location"] else {
+            throw CatalogError.message("CWA did not confirm the upload. Check its Tasks page before uploading again.")
+        }
+        let result = try await authenticatedPage(resolve(location, relativeTo: account.base))
+        if let error = try WebForm.errors(result) { throw CatalogError.message(error) }
+        // CWA queues uploads for ingest; only the tasks destination indicates acceptance.
+        guard (URLComponents(string: location)?.path ?? "").contains("tasks") else {
+            throw CatalogError.message("CWA did not accept the upload. Check its upload settings and ingest folder permissions.")
+        }
+    }
+    func deleteBook(id: Int) async throws {
+        let page = try await authenticatedPage(endpoint("me"))
+        let (bytes, _) = try await send(endpoint("ajax/delete/\(id)"), fields: ["csrf_token": try WebForm.token(page)])
+        let json = try JSONSerialization.jsonObject(with: bytes)
+        let messages = (json as? [[String: Any]]) ?? (json as? [String: Any]).map { [$0] } ?? []
+        if let failure = messages.first(where: { ["danger", "error"].contains($0["type"] as? String ?? "") }) {
+            throw CatalogError.message(failure["message"] as? String ?? "CWA could not delete this book.")
+        }
+        guard messages.contains(where: { $0["type"] as? String == "success" }) else {
+            throw CatalogError.message("CWA did not confirm deletion. Refresh your library before trying again.")
+        }
+    }
+    func allEntries(at url: URL) async throws -> [Entry] {
+        var next: URL? = url
+        var pages = Set<URL>()
+        var ids = Set<String>()
+        var entries: [Entry] = []
+        while let current = next {
+            try Task.checkCancellation()
+            guard pages.insert(current).inserted else { throw CatalogError.message("CWA returned a repeating catalog page.") }
+            let page = try await feed(current)
+            entries.append(contentsOf: page.entries.filter { ids.insert($0.id).inserted })
+            next = try page.next.map { try resolve($0, relativeTo: current) }
+        }
+        return entries
     }
     func forceKoboSync() async throws {
         let page = try await authenticatedPage(endpoint("me"))

@@ -6,6 +6,7 @@ on:
     paths:
       - 'CWA/**'
       - 'Tests/**'
+      - 'Scripts/**'
       - 'project.yml'
       - '.github/workflows/build-ios.yml'
 permissions:
@@ -33,6 +34,7 @@ jobs:
       - name: Generate Xcode project
         run: |
           brew install xcodegen
+          swift Scripts/GenerateIcons.swift
           xcodegen generate
       - name: Check catalog and metadata handling
         run: |

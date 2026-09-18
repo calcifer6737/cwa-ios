@@ -2,7 +2,7 @@ import Foundation
 import SwiftSoup
 
 @main struct CatalogChecks {
-    static func main() throws {
+    static func main() async throws {
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <feed xmlns="http://www.w3.org/2005/Atom">
@@ -83,6 +83,7 @@ import SwiftSoup
             metadata["rating"] = invalid
             do { try metadata.validate(); fatalError("Accepted invalid rating") } catch is CatalogError { }
         }
-        print("Catalog, origin safety, form preservation, and metadata checks passed.")
+        try await checkLibraryOperations()
+        print("Catalog, origin safety, metadata, pagination, upload, and deletion checks passed.")
     }
 }
