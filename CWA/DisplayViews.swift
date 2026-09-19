@@ -26,14 +26,20 @@ struct DisplaySection: View {
     @State private var icon = UIApplication.shared.alternateIconName ?? "Default"
     var body: some View {
         Section("Display") {
-            Picker(selection: $appearance) {
-                ForEach(["Automatic", "Light", "Dark"], id: \.self) { Text($0).tag($0) }
-            } label: { Label("Appearance", systemImage: "moon") }
-            Picker(selection: $accent) {
-                ForEach(AccentChoice.names, id: \.self) { name in
-                    Label { Text(name) } icon: { Image(systemName: "circle.fill").foregroundStyle(AccentChoice.color(name)) }.tag(name)
+            Menu {
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(["Automatic", "Light", "Dark"], id: \.self) { Text($0).tag($0) }
                 }
-            } label: { Label("Accent Color", systemImage: "paintpalette") }
+            } label: { settingRow("Appearance", symbol: "moon", value: appearance) }
+            Menu {
+                ForEach(AccentChoice.names, id: \.self) { name in
+                    Button { accent = name } label: {
+                        Label { Text((accent == name ? "✓ " : "") + name) } icon: {
+                            Image(uiImage: swatch(name)).renderingMode(.original)
+                        }
+                    }
+                }
+            } label: { settingRow("Accent Color", symbol: "paintpalette", value: accent) }
             NavigationLink {
                 AppIconPicker()
             } label: {
@@ -44,8 +50,24 @@ struct DisplaySection: View {
                 }
             }
         }
+        .tint(AccentChoice.color(accent))
         .onAppear { icon = UIApplication.shared.alternateIconName ?? "Default" }
     }
+    private func settingRow(_ title: String, symbol: String, value: String) -> some View {
+        HStack {
+            Label(title, systemImage: symbol).foregroundStyle(.primary)
+            Spacer()
+            Text(value).foregroundStyle(AccentChoice.color(accent))
+            Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(AccentChoice.color(accent))
+        }.contentShape(Rectangle())
+    }
+    private func swatch(_ name: String) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 22, height: 22)).image { _ in
+            UIColor(AccentChoice.color(name)).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 1, y: 1, width: 20, height: 20)).fill()
+        }.withRenderingMode(.alwaysOriginal)
+    }
+
 }
 
 struct AppIconPicker: View {
@@ -59,7 +81,7 @@ struct AppIconPicker: View {
                 ForEach(Self.names, id: \.self) { name in
                     Button { Task { await choose(name) } } label: {
                         VStack(spacing: 10) {
-                            Image("Preview" + name).resizable().aspectRatio(1, contentMode: .fit)
+                            Image("Preview" + name).renderingMode(.original).resizable().aspectRatio(1, contentMode: .fit)
                                 .clipShape(RoundedRectangle(cornerRadius: 19))
                                 .padding(5)
                                 .overlay(RoundedRectangle(cornerRadius: 24).stroke(selected == name ? Color.primary : .clear, lineWidth: 2))

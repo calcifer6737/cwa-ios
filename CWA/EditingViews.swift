@@ -53,19 +53,20 @@ struct MetadataEditor: View {
     @State private var findCover = false
     @State private var discard = false
     @State private var releaseYear = ""
-    private var dirty: Bool { metadata.map { $0.fields != $0.original || releaseYear != $0.year } == true || coverData != nil }
+    @State private var descriptionText = ""
+    @State private var originalDescription = ""
+    private var dirty: Bool { metadata.map { $0.fields != $0.original || releaseYear != $0.year || descriptionText != originalDescription } == true || coverData != nil }
     private func field(_ name: String) -> Binding<String> {
         Binding(get: { metadata?[name] ?? "" }, set: { metadata?[name] = $0 })
     }
     var body: some View {
         NavigationStack {
             Form {
-                if loading { Section { ProgressView("Loading book metadata…") } }
+                if loading { Section { VStack(spacing: 12) { ProgressView(); Text("Loading book metadata…").font(.callout).foregroundStyle(.secondary) }.frame(maxWidth: .infinity).padding(.vertical, 12) } }
                 if metadata != nil {
                     Section("Book details") {
                         TextField("Title", text: field("title"), axis: .vertical)
-                        TextField("Author", text: field("authors"), axis: .vertical)
-                        Text("Separate multiple authors with &.").font(.caption).foregroundStyle(.secondary)
+                        TextField("Authors, separated by &", text: field("authors"), axis: .vertical)
                         TextField("Release year", text: $releaseYear).keyboardType(.numberPad)
                         TextField("Publisher", text: field("publisher"))
                         Picker("Rating", selection: field("rating")) {
@@ -80,6 +81,10 @@ struct MetadataEditor: View {
                         TextField("Series name", text: field("series"))
                         TextField("Number in series", text: field("series_index")).keyboardType(.decimalPad)
                         Text("Decimals such as 0.5 and 1.5 are supported.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Section("Description") {
+                        TextEditor(text: $descriptionText).frame(minHeight: 160)
+                            .accessibilityLabel("Book description")
                     }
                     Section("Cover") {
                         HStack {
@@ -148,6 +153,8 @@ struct MetadataEditor: View {
         do {
             metadata = try await client.metadata(bookID: id, uuid: uuid)
             releaseYear = metadata?.year ?? ""
+            descriptionText = BookDescription.plainText(metadata?["comments"] ?? "")
+            originalDescription = descriptionText
         }
         catch { self.error = error.localizedDescription }
     }
@@ -173,6 +180,7 @@ struct MetadataEditor: View {
     @MainActor private func save() async {
         guard var metadata, !busy else { return }
         metadata.year = releaseYear.trimmingCharacters(in: .whitespacesAndNewlines)
+        if descriptionText != originalDescription { metadata["comments"] = BookDescription.html(descriptionText) }
         busy = true; error = nil
         defer { busy = false }
         do {
@@ -196,7 +204,7 @@ struct CoverPicker: View {
             ScrollView {
                 VStack(spacing: 18) {
                     TextField("Title", text: $title).textFieldStyle(.roundedBorder)
-                    TextField("Author", text: $author).textFieldStyle(.roundedBorder)
+                    TextField("Authors, separated by &", text: $author).textFieldStyle(.roundedBorder)
                     Button("Search covers") { Task { await search() } }.buttonStyle(.borderedProminent).disabled(busy || title.isEmpty)
                     Text("Searches Open Library using the title and author. Cover availability varies by book and edition.").font(.caption).foregroundStyle(.secondary)
                     if busy { ProgressView() }

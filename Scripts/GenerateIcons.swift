@@ -29,9 +29,10 @@ func writeAsset(_ name: String, _ data: Data, icon: Bool) throws {
 let original = try Data(contentsOf: root.appendingPathComponent("AppIcon.appiconset/AppIcon.png"))
 try writeAsset("PreviewDefault", original, icon: false)
 for (name, top, bottom, ink) in palettes {
-    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024, bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    let context = CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 8, bytesPerRow: 4096,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
     NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
     NSGradient(starting: color(bottom), ending: color(top))!.draw(in: NSRect(x: 0, y: 0, width: 1024, height: 1024), angle: 90)
     for (i, rect) in [NSRect(x: 215, y: 252, width: 152, height: 512), NSRect(x: 390, y: 252, width: 162, height: 557), NSRect(x: 590, y: 252, width: 162, height: 477)].enumerated() {
         (name == "ATP" ? [color("F4BA32"), color("E94861"), color("379EDD")][i] : color(ink)).setFill()
@@ -42,8 +43,25 @@ for (name, top, bottom, ink) in palettes {
         }
     }
     NSGraphicsContext.restoreGraphicsState()
+    let rendered = context.makeImage()!
+    let bitmap = NSBitmapImageRep(cgImage: rendered)
+    // Fail the build if drawing produced a blank image again.
+    let background = bitmap.colorAt(x: 50, y: 50)!
+    let book = bitmap.colorAt(x: 450, y: 500)!
+    precondition(background != book, "Blank generated icon: \(name)")
     let png = bitmap.representation(using: .png, properties: [:])!
     try writeAsset(name, png, icon: true)
     try writeAsset("Preview" + name, png, icon: false)
 }
 print("Generated nine alternate CWA icons and ten previews.")
+
+// Export a contact sheet for visual review of the exact generated image bytes.
+let sheet = CGContext(data: nil, width: 1000, height: 420, bitsPerComponent: 8, bytesPerRow: 4000,
+                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+sheet.setFillColor(CGColor(gray: 0.12, alpha: 1)); sheet.fill(CGRect(x: 0, y: 0, width: 1000, height: 420))
+for (index, name) in (["Default"] + palettes.map { $0.0 }).enumerated() {
+    let bytes = try Data(contentsOf: root.appendingPathComponent("Preview\(name).imageset/image.png"))
+    let image = NSBitmapImageRep(data: bytes)!.cgImage!
+    sheet.draw(image, in: CGRect(x: (index % 5) * 200 + 10, y: (1 - index / 5) * 210 + 15, width: 180, height: 180))
+}
+try NSBitmapImageRep(cgImage: sheet.makeImage()!).representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: "icon-preview.png"))

@@ -58,6 +58,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: CWA-iPhone
-          path: CWA.ipa
+          path: |
+            CWA.ipa
+            icon-preview.png
           retention-days: 3
           if-no-files-found: error

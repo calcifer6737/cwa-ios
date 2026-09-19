@@ -148,6 +148,25 @@ final class RedirectGuard: NSObject, URLSessionTaskDelegate {
 final class Catalog {
     let account: Account
     let session: URLSession
+    private let feeds = NSCache<NSURL, FeedBox>()
+    private let cacheLock = NSLock()
+    private var epoch = UUID()
+    var cacheEpoch: UUID { cacheLock.lock(); defer { cacheLock.unlock() }; return epoch }
+    private func clearFeeds() { cacheLock.lock(); defer { cacheLock.unlock() }; epoch = UUID(); feeds.removeAllObjects() }
+    private func storeFeed(_ value: Feed, url: URL, epoch expected: UUID) throws {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        guard epoch == expected else { throw CancellationError() }
+        feeds.setObject(FeedBox(value), forKey: url as NSURL)
+    }
+    #if canImport(UIKit)
+    let browsing = BrowseMemory()
+    #endif
+    func invalidateBrowsing() {
+        clearFeeds()
+        #if canImport(UIKit)
+        browsing.clear()
+        #endif
+    }
     init(_ account: Account, configuration: URLSessionConfiguration = .ephemeral) {
         self.account = account
         configuration.timeoutIntervalForRequest = 30
@@ -187,7 +206,14 @@ final class Catalog {
         try check(response)
         return data
     }
-    func feed(_ url: URL) async throws -> Feed { try FeedParser().parse(try await data(url)) }
+    func feed(_ url: URL) async throws -> Feed {
+        if let cached = feeds.object(forKey: url as NSURL) { return cached.value }
+        let expected = cacheEpoch
+        let value = try FeedParser().parse(try await data(url))
+        try Task.checkCancellation()
+        try storeFeed(value, url: url, epoch: expected)
+        return value
+    }
     func download(_ url: URL, title: String, format: String) async throws -> URL {
         let (temporary, response) = try await session.download(for: request(url))
         try check(response)
@@ -200,3 +226,5 @@ final class Catalog {
         return destination
     }
 }
+
+private final class FeedBox { let value: Feed; init(_ value: Feed) { self.value = value } }

@@ -266,3 +266,17 @@ enum CoverSearch {
         return bytes
     }
 }
+
+// Preserve untouched HTML. Convert only a user-edited description to safe paragraphs.
+enum BookDescription {
+    static func plainText(_ html: String) -> String {
+        guard let doc = try? SwiftSoup.parse(html) else { return html }
+        for element in (try? doc.select("br").array()) ?? [] { _ = try? element.before("\n") }
+        for element in (try? doc.select("p, div, li, h1, h2, h3").array()) ?? [] { _ = try? element.appendText("\n\n") }
+        return ((try? doc.body()?.text(trimAndNormaliseWhitespace: false)) ?? html).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    static func html(_ text: String) -> String {
+        let escaped = text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+        return escaped.isEmpty ? "" : "<p>" + escaped.replacingOccurrences(of: "\n", with: "<br>") + "</p>"
+    }
+}

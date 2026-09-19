@@ -107,7 +107,7 @@ struct MainView: View {
                         Section {
                             Button("Disconnect", role: .destructive, action: disconnect)
                         } footer: { Text("Removes the saved login from this iPhone. Books already exported to Files or another app remain there.") }
-                        Section { LabeledContent("Version", value: "0.3.0") }
+                        Section { LabeledContent("Version", value: "0.4.0") }
                     }.navigationTitle("Settings")
                 }
             }
@@ -177,6 +177,15 @@ struct CatalogView: View {
     @State private var busy = false
     @State private var loaded = false
     @State private var error: String?
+    @State private var scrollID: String?
+    init(client: Catalog, url: URL, title: String) {
+        self.client = client; self.url = url; self.title = title
+        let cached = client.browsing.pages[url]
+        _entries = State(initialValue: cached?.entries ?? [])
+        _next = State(initialValue: cached?.next)
+        _loaded = State(initialValue: cached != nil)
+        _scrollID = State(initialValue: cached?.scroll)
+    }
     private let columns = [GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 18, alignment: .top)]
     var body: some View {
         ScrollView {
@@ -209,16 +218,18 @@ struct CatalogView: View {
                             } label: { BookTile(client: client, book: entry, page: url) }.buttonStyle(.plain)
                         }
                     }
-                }
+                }.scrollTargetLayout()
                 if busy { ProgressView().padding() }
                 if next != nil && !busy {
                     Button("Load more") { Task { await load(reset: false) } }.buttonStyle(.bordered).padding()
                 }
             }.padding(20)
         }
+        .scrollPosition(id: $scrollID)
+        .onChange(of: scrollID) { _, id in client.browsing.pages[url]?.scroll = id }
         .navigationTitle(title)
-        .task { if !loaded { await load(reset: true) } }
-        .refreshable { await load(reset: true) }
+        .task { if !loaded || client.browsing.pages[url] == nil { await load(reset: true) } }
+        .refreshable { client.invalidateBrowsing(); await load(reset: true) }
         .onReceive(NotificationCenter.default.publisher(for: .cwaBookChanged)) { _ in
             Task { await load(reset: true) }
         }
@@ -247,6 +258,7 @@ struct CatalogView: View {
             var ids = Set(result.map(\.id))
             for entry in feed.entries where ids.insert(entry.id).inserted { result.append(entry) }
             entries = result; next = nextURL; loaded = true
+            client.browsing.pages[url] = BrowseMemory.Page(entries: result, next: nextURL, scroll: scrollID)
         } catch is CancellationError { }
         catch { if !Task.isCancelled { self.error = error.localizedDescription; loaded = true } }
     }
@@ -258,6 +270,12 @@ struct CoverView: View {
     let page: URL
     @State private var image: UIImage?
     @State private var revision = UUID()
+    init(client: Catalog, book: Entry, page: URL) {
+        self.client = client; self.book = book; self.page = page
+        if let link = book.cover, let url = try? client.resolve(link.href, relativeTo: page) {
+            _image = State(initialValue: client.browsing.covers.object(forKey: url as NSURL))
+        }
+    }
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.10))
@@ -270,9 +288,12 @@ struct CoverView: View {
         .onReceive(NotificationCenter.default.publisher(for: .cwaBookChanged)) { _ in revision = UUID() }
         .task(id: revision) {
             guard let link = book.cover,
-                  let url = try? client.resolve(link.href, relativeTo: page),
-                  let data = try? await client.data(url) else { return }
-            image = UIImage(data: data)
+                  let url = try? client.resolve(link.href, relativeTo: page) else { return }
+            if let cached = client.browsing.covers.object(forKey: url as NSURL) { image = cached; return }
+            let expected = client.cacheEpoch
+            guard let data = try? await client.data(url), !Task.isCancelled, expected == client.cacheEpoch, let decoded = UIImage(data: data) else { return }
+            client.browsing.covers.setObject(decoded, forKey: url as NSURL, cost: Int(decoded.size.width * decoded.size.height * 4))
+            image = decoded
         }
     }
 }
@@ -348,10 +369,12 @@ struct BookView: View {
             MetadataEditor(client: client, book: book, page: page) { metadata in
                 book.title = metadata["title"]
                 book.authors = metadata["authors"].components(separatedBy: " & ")
+                book.summary = BookDescription.plainText(metadata["comments"])
                 book.publisher = metadata["publisher"]
                 book.published = metadata["pubdate"]
                 book.tags = metadata["tags"].components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
                 notice = "Saved to CWA."
+                client.invalidateBrowsing()
                 NotificationCenter.default.post(name: .cwaBookChanged, object: nil)
             }
         }
@@ -366,7 +389,8 @@ struct BookView: View {
         defer { busy = false }
         do {
             try await client.deleteBook(id: id)
-            NotificationCenter.default.post(name: .cwaBookChanged, object: nil)
+            client.invalidateBrowsing()
+                NotificationCenter.default.post(name: .cwaBookChanged, object: nil)
             dismiss()
         } catch { self.error = error.localizedDescription }
     }

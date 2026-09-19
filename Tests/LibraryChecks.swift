@@ -17,10 +17,23 @@ final class StubProtocol: URLProtocol {
 }
 
 func checkLibraryOperations() async throws {
+    let original = "<p>A &amp; B</p><p>Second paragraph</p>"
+    let plain = BookDescription.plainText(original)
+    precondition(plain.contains("A & B") && plain.contains("Second paragraph"))
+    precondition(BookDescription.html("<script>&\nnext") == "<p>&lt;script&gt;&amp;<br>next</p>")
+    var header = Data(repeating: 0, count: 30)
+    header.replaceSubrange(0..<4, with: [0x50, 0x4b, 0x03, 0x04]); header[26] = 8
+    header.append(Data("mimetypeapplication/epub+zip".utf8))
+    try EPUBImport.validateHeader(header)
+    for invalid in [Data("<html>verification</html>".utf8), Data(repeating: 0, count: 128)] {
+        do { try EPUBImport.validateHeader(invalid); fatalError("Accepted a non-EPUB download") } catch is CatalogError { }
+    }
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [StubProtocol.self]
     let client = Catalog(Account(server: "https://library.example", username: "tester", password: "test"), configuration: configuration)
+    var requests = 0
     StubProtocol.handler = { req in
+        requests += 1
         if req.url!.query == nil {
             return (200, "<feed><link rel='next' href='/books?offset=2'/><entry><id>a</id><title>A</title></entry><entry><id>b</id><title>B</title></entry></feed>")
         }
@@ -28,6 +41,12 @@ func checkLibraryOperations() async throws {
     }
     let books = try await client.allEntries(at: client.endpoint("books"))
     precondition(books.map(\.id) == ["a", "b", "c"])
+    let again = try await client.allEntries(at: client.endpoint("books"))
+    precondition(again.count == 3 && requests == 2, "Cached browsing repeated network requests")
+    client.invalidateBrowsing()
+    _ = try await client.allEntries(at: client.endpoint("books"))
+    precondition(requests == 4, "Refresh failed to fetch new pages")
+    client.invalidateBrowsing()
     StubProtocol.handler = { _ in (200, "<feed><link rel='next' href='/books'/></feed>") }
     do { _ = try await client.allEntries(at: client.endpoint("books")); fatalError("Accepted pagination loop") } catch is CatalogError { }
 

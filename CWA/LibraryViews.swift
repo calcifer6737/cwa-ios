@@ -6,6 +6,7 @@ struct LibraryView: View {
     @State private var order = "Title"
     @State private var filter = "All Books"
     @State private var importing = false
+    @State private var archive = false
     @State private var uploading = false
     @State private var uploadMessage = ""
     @State private var showUploadMessage = false
@@ -20,7 +21,10 @@ struct LibraryView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { importing = true } label: {
+                Menu {
+                    Button("From Files", systemImage: "folder") { importing = true }
+                    Button("From Anna’s Archive", systemImage: "globe") { archive = true }
+                } label: {
                     if uploading { ProgressView() } else { Label("Add books", systemImage: "plus") }
                 }.disabled(uploading)
             }
@@ -39,6 +43,7 @@ struct LibraryView: View {
                 .disabled(filter != "All Books")
             }
         }
+        .sheet(isPresented: $archive) { ArchiveBrowser(client: client) }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): Task { await upload(urls) }
@@ -62,7 +67,7 @@ struct LibraryView: View {
         uploadMessage = accepted > 0 ? "\(accepted) book(s) queued for processing in CWA. Pull to refresh your library after processing finishes." : "No uploads were confirmed."
         if !errors.isEmpty { uploadMessage += "\n\n" + errors.joined(separator: "\n") }
         showUploadMessage = true
-        if accepted > 0 { NotificationCenter.default.post(name: .cwaBookChanged, object: nil) }
+        if accepted > 0 { client.invalidateBrowsing(); NotificationCenter.default.post(name: .cwaBookChanged, object: nil) }
     }
 }
 
@@ -74,6 +79,15 @@ struct LibraryGroups: View {
     @State private var error: String?
     @State private var loading = true
     @State private var revision = UUID()
+    @State private var scrollID: String?
+    init(client: Catalog, kind: String) {
+        self.client = client; self.kind = kind
+        let cached = client.browsing.groups[kind]
+        _entries = State(initialValue: cached?.entries ?? [])
+        _counts = State(initialValue: cached?.counts ?? [:])
+        _loading = State(initialValue: cached == nil)
+        _scrollID = State(initialValue: cached?.scroll)
+    }
     private var url: URL { client.endpoint(kind == "Authors" ? "opds/author/letter/00" : "opds/series/letter/00") }
     var body: some View {
         List {
@@ -102,24 +116,32 @@ struct LibraryGroups: View {
                 ContentUnavailableView("No \(kind.lowercased()) yet", systemImage: kind == "Authors" ? "person.2" : "books.vertical")
             }
         }
+        .scrollPosition(id: $scrollID)
+        .onChange(of: scrollID) { _, id in client.browsing.groups[kind]?.scroll = id }
         .navigationTitle(kind)
         .task(id: revision) { await load() }
-        .refreshable { revision = UUID() }
-        .onReceive(NotificationCenter.default.publisher(for: .cwaBookChanged)) { _ in revision = UUID() }
+        .refreshable { client.invalidateBrowsing(); counts = [:]; revision = UUID() }
+        .onReceive(NotificationCenter.default.publisher(for: .cwaBookChanged)) { _ in counts = [:]; revision = UUID() }
     }
     @MainActor private func load() async {
-        loading = true; error = nil; counts = [:]
+        if let cached = client.browsing.groups[kind], cached.counts.count == cached.entries.count {
+            entries = cached.entries; counts = cached.counts; loading = false; return
+        }
+        loading = true; error = nil
         defer { loading = false }
         do {
             let items = try await client.allEntries(at: url)
             try Task.checkCancellation()
             entries = items.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            client.browsing.groups[kind] = BrowseMemory.Groups(entries: entries, counts: counts, scroll: scrollID)
             for entry in entries {
+                if counts[entry.id] != nil { continue }
                 try Task.checkCancellation()
                 guard let link = entry.subsection else { continue }
                 let books = try await client.allEntries(at: client.resolve(link.href, relativeTo: url))
                 try Task.checkCancellation()
                 counts[entry.id] = books.filter(\.isBook).count
+                client.browsing.groups[kind]?.counts = counts
             }
         } catch is CancellationError { }
         catch { if !Task.isCancelled { self.error = error.localizedDescription } }
